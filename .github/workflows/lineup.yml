@@ -1,4 +1,4 @@
-name: Sleeper lineup to WhatsApp
+name: Sleeper lineup email
 
 on:
   schedule:
@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build and send lineup
+      - name: Build and email lineup
         env:
           LEAGUE_ID: "1394837725651177472"
           SLEEPER_USERNAME: "kingkonguhlig1"
@@ -31,13 +31,4 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          CALLMEBOT_PHONE: ${{ secrets.CALLMEBOT_PHONE }}
-          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
-          WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
-          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
-          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-          TWILIO_WHATSAPP_FROM: ${{ secrets.TWILIO_WHATSAPP_FROM }}
-          TWILIO_CONTENT_SID: ${{ secrets.TWILIO_CONTENT_SID }}
-          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
-          WHATSAPP_PHONE_ID: ${{ secrets.WHATSAPP_PHONE_ID }}
         run: python lineup.py --auto
