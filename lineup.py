@@ -335,19 +335,39 @@ def post(url: str, data: bytes, headers: dict) -> str:
         return r.read().decode()[:300]
 
 
+def _mask(v: Optional[str]) -> str:
+    if not v:
+        return "NOT SET"
+    return f"set ({len(v)} chars, ends ...{v[-4:]})"
+
+
+def report_config() -> None:
+    print("--- delivery config ---")
+    print(f"  CALLMEBOT_PHONE      {_mask(os.getenv('CALLMEBOT_PHONE'))}")
+    print(f"  CALLMEBOT_APIKEY     {_mask(os.getenv('CALLMEBOT_APIKEY'))}")
+    print(f"  TWILIO_ACCOUNT_SID   {_mask(os.getenv('TWILIO_ACCOUNT_SID'))}")
+    print(f"  TWILIO_AUTH_TOKEN    {_mask(os.getenv('TWILIO_AUTH_TOKEN'))}")
+    print(f"  TWILIO_WHATSAPP_FROM {_mask(os.getenv('TWILIO_WHATSAPP_FROM'))}")
+    print(f"  WHATSAPP_TO          {_mask(os.getenv('WHATSAPP_TO'))}")
+    print(f"  WHATSAPP_TOKEN       {_mask(os.getenv('WHATSAPP_TOKEN'))}")
+    print(f"  WHATSAPP_PHONE_ID    {_mask(os.getenv('WHATSAPP_PHONE_ID'))}")
+    print("-----------------------")
+
+
 def send_whatsapp(text: str) -> bool:
-    """Tries Twilio -> Meta Cloud API -> CallMeBot, whichever is configured."""
+    """Tries Twilio -> Meta Cloud API -> CallMeBot. Loud about what it did."""
+    report_config()
     sent = False
+    attempted = False
 
     sid, tok = os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")
     t_from, t_to = os.getenv("TWILIO_WHATSAPP_FROM"), os.getenv("WHATSAPP_TO")
     if sid and tok and t_from and t_to:
+        attempted = True
         import base64
         fields = {"From": t_from, "To": t_to}
         content_sid = os.getenv("TWILIO_CONTENT_SID")
         if content_sid:
-            # Business-initiated messages outside the 24h window need an
-            # approved template. Template should contain a single {{1}} var.
             fields["ContentSid"] = content_sid
             fields["ContentVariables"] = json.dumps({"1": text[:1000]})
         else:
@@ -355,39 +375,66 @@ def send_whatsapp(text: str) -> bool:
         body = urllib.parse.urlencode(fields).encode()
         auth = base64.b64encode(f"{sid}:{tok}".encode()).decode()
         try:
-            post(f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json", body,
-                 {"Authorization": f"Basic {auth}",
-                  "Content-Type": "application/x-www-form-urlencoded"})
-            print("sent via Twilio")
+            resp = post(f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json", body,
+                        {"Authorization": f"Basic {auth}",
+                         "Content-Type": "application/x-www-form-urlencoded"})
+            print("Twilio accepted the message.")
+            print(f"  Twilio response: {resp[:200]}")
+            print("  NOTE: 'queued' is not 'delivered'. Check the Twilio console "
+                  "Messaging logs if it never arrives (24h window / template rules).")
             sent = True
         except Exception as e:  # noqa: BLE001
-            print(f"Twilio send failed: {e}", file=sys.stderr)
+            print(f"Twilio send FAILED: {e}", file=sys.stderr)
+    else:
+        print("Twilio: not configured, skipping.")
 
     token, phone_id = os.getenv("WHATSAPP_TOKEN"), os.getenv("WHATSAPP_PHONE_ID")
     if not sent and token and phone_id and os.getenv("WHATSAPP_TO"):
+        attempted = True
         to = os.getenv("WHATSAPP_TO", "").replace("whatsapp:", "").lstrip("+")
         payload = json.dumps({"messaging_product": "whatsapp", "to": to,
                               "type": "text", "text": {"body": text[:4000]}}).encode()
         try:
-            post(f"https://graph.facebook.com/v21.0/{phone_id}/messages", payload,
-                 {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-            print("sent via Meta Cloud API")
+            resp = post(f"https://graph.facebook.com/v21.0/{phone_id}/messages", payload,
+                        {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            print(f"Meta Cloud API accepted. Response: {resp[:200]}")
             sent = True
         except Exception as e:  # noqa: BLE001
-            print(f"Meta send failed: {e}", file=sys.stderr)
+            print(f"Meta send FAILED: {e}", file=sys.stderr)
+    elif not sent:
+        print("Meta Cloud API: not configured, skipping.")
 
     cb_phone, cb_key = os.getenv("CALLMEBOT_PHONE"), os.getenv("CALLMEBOT_APIKEY")
     if not sent and cb_phone and cb_key:
+        attempted = True
+        if not cb_phone.startswith("+"):
+            print(f"WARNING: CALLMEBOT_PHONE is {cb_phone!r} - it must start with "
+                  f"'+' and the country code, e.g. +15551234567", file=sys.stderr)
         q = urllib.parse.urlencode({"phone": cb_phone, "text": text[:3800], "apikey": cb_key})
         try:
-            get_json_or_text(f"https://api.callmebot.com/whatsapp.php?{q}")
-            print("sent via CallMeBot")
-            sent = True
+            resp = get_json_or_text(f"https://api.callmebot.com/whatsapp.php?{q}")
+            low = resp.lower()
+            bad = ("apikey" in low and "invalid" in low) or "error" in low or "not allowed" in low
+            print(f"CallMeBot response: {resp[:250]}")
+            if bad:
+                print("CallMeBot REJECTED the request - see the response text above. "
+                      "Most common causes: wrong apikey, phone number missing '+country code', "
+                      "or you never messaged the bot to authorise it.", file=sys.stderr)
+            else:
+                print("CallMeBot accepted the message.")
+                sent = True
         except Exception as e:  # noqa: BLE001
-            print(f"CallMeBot send failed: {e}", file=sys.stderr)
+            print(f"CallMeBot send FAILED: {e}", file=sys.stderr)
+    elif not sent:
+        print("CallMeBot: not configured, skipping.")
 
-    if not sent:
-        print("No WhatsApp provider configured/succeeded - console output only.", file=sys.stderr)
+    if not attempted:
+        print("\nNO DELIVERY PROVIDER IS CONFIGURED.\n"
+              "Add repository secrets under Settings > Secrets and variables > Actions.\n"
+              "For CallMeBot you need CALLMEBOT_PHONE and CALLMEBOT_APIKEY.", file=sys.stderr)
+    elif not sent:
+        print("\nA provider was configured but the send did not succeed - see above.",
+              file=sys.stderr)
     return sent
 
 
@@ -430,6 +477,8 @@ def main() -> None:
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--auto", action="store_true",
                     help="decide run/skip and plan-vs-final from Eastern time")
+    ap.add_argument("--check", action="store_true",
+                    help="send a one-line test message and report config")
     a = ap.parse_args()
 
     if a.auto:
@@ -439,11 +488,19 @@ def main() -> None:
             return
         a.final = a.final or is_final
 
+    if a.check:
+        ok = send_whatsapp("Sleeper lineup bot test message - if you can read this, "
+                           "delivery works.")
+        raise SystemExit(0 if ok else 1)
+
     subject, body = build_report(a.final, a.week, a.demo)
     print(subject)
     print(body)
     if not a.print_only and not a.demo:
-        send_whatsapp(body)
+        if not send_whatsapp(body):
+            # Fail the workflow so a silent non-delivery shows up as a red X
+            # instead of a misleading green check.
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
