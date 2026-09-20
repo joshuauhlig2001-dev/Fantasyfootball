@@ -1,0 +1,5 @@
+players_nfl.json
+__pycache__/
+*.pyc
+lineup_out.txt
+.env
