@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Sunday-morning lineup recommendations for a Sleeper fantasy football league,
-delivered to WhatsApp.
+delivered by email.
 
 League : 1394837725651177472  (PPR, QB/RB/RB/WR/WR/TE/FLEX/FLEX/DEF/K + 7 BN)
 Manager: kingkonguhlig1
 
 Usage:
-    python lineup.py                 # normal run, sends WhatsApp if creds present
+    python lineup.py                 # normal run, emails the lineup
     python lineup.py --print-only    # console only, no send
     python lineup.py --week 5        # override week
     python lineup.py --final         # "final check" wording (late-morning run)
@@ -360,13 +360,13 @@ def send_email(subject: str, text: str) -> bool:
     if "gmail" in host and len(password) != 16:
         print(f"  WARNING: Gmail App Passwords are exactly 16 characters; after "
               f"stripping, yours is {len(password)}. Regenerate at "
-              f"https://myaccount.google.com/apppasswords", file=sys.stderr)
+              f"https://myaccount.google.com/apppasswords")
 
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = from_addr
     msg["To"] = to_addr
-    # Strip the WhatsApp-style asterisks; they are noise in an email client.
+    # Strip the markdown-style asterisks; they are noise in an email client.
     body = "\n".join(ln.replace("*", "") for ln in text.splitlines())
     msg.set_content(body, charset="utf-8")
 
@@ -388,11 +388,11 @@ def send_email(subject: str, text: str) -> bool:
         print(f"Email sent to {to_addr} via {host}:{port}")
         return True
     except Exception as e:  # noqa: BLE001
-        print(f"Email send FAILED: {type(e).__name__}: {e}", file=sys.stderr)
+        print(f"Email send FAILED: {type(e).__name__}: {e}")
         if "5.7.8" in str(e) or "Username and Password not accepted" in str(e):
             print("  Gmail rejected the login. You must use a 16-character App "
                   "Password, not your normal account password, and 2-Step "
-                  "Verification must be on.", file=sys.stderr)
+                  "Verification must be on.")
         return False
 
 
@@ -403,111 +403,19 @@ def _mask(v: Optional[str]) -> str:
 
 
 def report_config() -> None:
-    print("--- delivery config ---")
-    print(f"  CALLMEBOT_PHONE      {_mask(os.getenv('CALLMEBOT_PHONE'))}")
-    print(f"  CALLMEBOT_APIKEY     {_mask(os.getenv('CALLMEBOT_APIKEY'))}")
-    print(f"  TWILIO_ACCOUNT_SID   {_mask(os.getenv('TWILIO_ACCOUNT_SID'))}")
-    print(f"  TWILIO_AUTH_TOKEN    {_mask(os.getenv('TWILIO_AUTH_TOKEN'))}")
-    print(f"  TWILIO_WHATSAPP_FROM {_mask(os.getenv('TWILIO_WHATSAPP_FROM'))}")
-    print(f"  WHATSAPP_TO          {_mask(os.getenv('WHATSAPP_TO'))}")
-    print(f"  WHATSAPP_TOKEN       {_mask(os.getenv('WHATSAPP_TOKEN'))}")
-    print(f"  WHATSAPP_PHONE_ID    {_mask(os.getenv('WHATSAPP_PHONE_ID'))}")
-    print(f"  SMTP_USER            {_mask(os.getenv('SMTP_USER'))}")
-    print(f"  SMTP_PASS            {_mask(os.getenv('SMTP_PASS'))}")
-    print(f"  EMAIL_TO             {os.getenv('EMAIL_TO') or os.getenv('SMTP_USER') or 'NOT SET'}")
-    print("-----------------------")
-
-
-def send_whatsapp(text: str) -> bool:
-    """Tries Twilio -> Meta Cloud API -> CallMeBot. Loud about what it did."""
-    sent = False
-    attempted = False
-
-    sid, tok = os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")
-    t_from, t_to = os.getenv("TWILIO_WHATSAPP_FROM"), os.getenv("WHATSAPP_TO")
-    if sid and tok and t_from and t_to:
-        attempted = True
-        import base64
-        fields = {"From": t_from, "To": t_to}
-        content_sid = os.getenv("TWILIO_CONTENT_SID")
-        if content_sid:
-            fields["ContentSid"] = content_sid
-            fields["ContentVariables"] = json.dumps({"1": text[:1000]})
-        else:
-            fields["Body"] = text[:1550]
-        body = urllib.parse.urlencode(fields).encode()
-        auth = base64.b64encode(f"{sid}:{tok}".encode()).decode()
-        try:
-            resp = post(f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json", body,
-                        {"Authorization": f"Basic {auth}",
-                         "Content-Type": "application/x-www-form-urlencoded"})
-            print("Twilio accepted the message.")
-            print(f"  Twilio response: {resp[:200]}")
-            print("  NOTE: 'queued' is not 'delivered'. Check the Twilio console "
-                  "Messaging logs if it never arrives (24h window / template rules).")
-            sent = True
-        except Exception as e:  # noqa: BLE001
-            print(f"Twilio send FAILED: {e}", file=sys.stderr)
-    else:
-        print("Twilio: not configured, skipping.")
-
-    token, phone_id = os.getenv("WHATSAPP_TOKEN"), os.getenv("WHATSAPP_PHONE_ID")
-    if not sent and token and phone_id and os.getenv("WHATSAPP_TO"):
-        attempted = True
-        to = os.getenv("WHATSAPP_TO", "").replace("whatsapp:", "").lstrip("+")
-        payload = json.dumps({"messaging_product": "whatsapp", "to": to,
-                              "type": "text", "text": {"body": text[:4000]}}).encode()
-        try:
-            resp = post(f"https://graph.facebook.com/v21.0/{phone_id}/messages", payload,
-                        {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-            print(f"Meta Cloud API accepted. Response: {resp[:200]}")
-            sent = True
-        except Exception as e:  # noqa: BLE001
-            print(f"Meta send FAILED: {e}", file=sys.stderr)
-    elif not sent:
-        print("Meta Cloud API: not configured, skipping.")
-
-    cb_phone, cb_key = os.getenv("CALLMEBOT_PHONE"), os.getenv("CALLMEBOT_APIKEY")
-    if not sent and cb_phone and cb_key:
-        attempted = True
-        if not cb_phone.startswith("+"):
-            print(f"WARNING: CALLMEBOT_PHONE is {cb_phone!r} - it must start with "
-                  f"'+' and the country code, e.g. +15551234567", file=sys.stderr)
-        q = urllib.parse.urlencode({"phone": cb_phone, "text": text[:3800], "apikey": cb_key})
-        try:
-            resp = get_json_or_text(f"https://api.callmebot.com/whatsapp.php?{q}")
-            low = resp.lower()
-            bad = ("apikey" in low and "invalid" in low) or "error" in low or "not allowed" in low
-            print(f"CallMeBot response: {resp[:250]}")
-            if bad:
-                print("CallMeBot REJECTED the request - see the response text above. "
-                      "Most common causes: wrong apikey, phone number missing '+country code', "
-                      "or you never messaged the bot to authorise it.", file=sys.stderr)
-            else:
-                print("CallMeBot accepted the message.")
-                sent = True
-        except Exception as e:  # noqa: BLE001
-            print(f"CallMeBot send FAILED: {e}", file=sys.stderr)
-    elif not sent:
-        print("CallMeBot: not configured, skipping.")
-
-    if not attempted:
-        print("No WhatsApp provider configured.")
-    elif not sent:
-        print("\nA WhatsApp provider was configured but the send did not succeed.",
-              file=sys.stderr)
-    return sent
+    print("--- email config ---")
+    print(f"  SMTP_HOST  {os.getenv('SMTP_HOST') or 'smtp.gmail.com (default)'}")
+    print(f"  SMTP_PORT  {os.getenv('SMTP_PORT') or '587 (default)'}")
+    print(f"  SMTP_USER  {_mask(os.getenv('SMTP_USER'))}")
+    print(f"  SMTP_PASS  {_mask(os.getenv('SMTP_PASS'))}")
+    print(f"  EMAIL_TO   {_mask(os.getenv('EMAIL_TO'))}")
+    print("--------------------")
 
 
 def deliver(subject: str, text: str) -> bool:
-    """Sends via every configured channel. True if at least one succeeded."""
+    """Email-only delivery."""
     report_config()
-    ok_email = send_email(subject, text)
-    ok_wa = send_whatsapp(text)
-    if not (ok_email or ok_wa):
-        print("\nNothing was delivered. Configure email (SMTP_USER / SMTP_PASS / "
-              "EMAIL_TO) or a WhatsApp provider.", file=sys.stderr)
-    return ok_email or ok_wa
+    return send_email(subject, text)
 
 
 def get_json_or_text(url: str) -> str:
@@ -542,6 +450,15 @@ def auto_decide() -> Tuple[bool, bool]:
 
 
 def main() -> None:
+    # GitHub Actions merges stdout and stderr, but Python line-buffers stdout
+    # and never buffers stderr, so errors jump to the top of the log. Force
+    # both unbuffered so the log reads in true chronological order.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:  # noqa: BLE001
+        pass
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--week", type=int)
     ap.add_argument("--final", action="store_true")
