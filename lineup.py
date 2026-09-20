@@ -335,6 +335,57 @@ def post(url: str, data: bytes, headers: dict) -> str:
         return r.read().decode()[:300]
 
 
+def send_email(subject: str, text: str) -> bool:
+    """Sends the lineup via SMTP. Works with Gmail app passwords, Outlook, etc."""
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+
+    host = os.getenv("SMTP_HOST") or "smtp.gmail.com"
+    port = int(os.getenv("SMTP_PORT") or "587")
+    user = os.getenv("SMTP_USER")
+    password = os.getenv("SMTP_PASS")
+    to_addr = os.getenv("EMAIL_TO") or user
+    from_addr = os.getenv("EMAIL_FROM") or user
+
+    if not (user and password and to_addr):
+        print("Email: not configured, skipping.")
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    # Strip the WhatsApp-style asterisks; they are noise in an email client.
+    body = "\n".join(ln.replace("*", "") for ln in text.splitlines())
+    msg.set_content(body, charset="utf-8")
+
+    try:
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=45,
+                                  context=ssl.create_default_context()) as s:
+                s.login(user, password)
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=45) as s:
+                s.ehlo()
+                if os.getenv("SMTP_STARTTLS", "1") != "0":
+                    s.starttls(context=ssl.create_default_context())
+                    s.ehlo()
+                if password != "-":
+                    s.login(user, password)
+                s.send_message(msg)
+        print(f"Email sent to {to_addr} via {host}:{port}")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"Email send FAILED: {type(e).__name__}: {e}", file=sys.stderr)
+        if "5.7.8" in str(e) or "Username and Password not accepted" in str(e):
+            print("  Gmail rejected the login. You must use a 16-character App "
+                  "Password, not your normal account password, and 2-Step "
+                  "Verification must be on.", file=sys.stderr)
+        return False
+
+
 def _mask(v: Optional[str]) -> str:
     if not v:
         return "NOT SET"
@@ -351,6 +402,9 @@ def report_config() -> None:
     print(f"  WHATSAPP_TO          {_mask(os.getenv('WHATSAPP_TO'))}")
     print(f"  WHATSAPP_TOKEN       {_mask(os.getenv('WHATSAPP_TOKEN'))}")
     print(f"  WHATSAPP_PHONE_ID    {_mask(os.getenv('WHATSAPP_PHONE_ID'))}")
+    print(f"  SMTP_USER            {_mask(os.getenv('SMTP_USER'))}")
+    print(f"  SMTP_PASS            {_mask(os.getenv('SMTP_PASS'))}")
+    print(f"  EMAIL_TO             {os.getenv('EMAIL_TO') or os.getenv('SMTP_USER') or 'NOT SET'}")
     print("-----------------------")
 
 
@@ -438,6 +492,16 @@ def send_whatsapp(text: str) -> bool:
     return sent
 
 
+def deliver(subject: str, text: str) -> bool:
+    """Sends via every configured channel. True if at least one succeeded."""
+    ok_email = send_email(subject, text)
+    ok_wa = send_whatsapp(text)
+    if not (ok_email or ok_wa):
+        print("\nNothing was delivered. Configure email (SMTP_USER / SMTP_PASS / "
+              "EMAIL_TO) or a WhatsApp provider.", file=sys.stderr)
+    return ok_email or ok_wa
+
+
 def get_json_or_text(url: str) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "sleeper-lineup-bot/1.0"})
     with urllib.request.urlopen(req, timeout=45) as r:
@@ -489,15 +553,16 @@ def main() -> None:
         a.final = a.final or is_final
 
     if a.check:
-        ok = send_whatsapp("Sleeper lineup bot test message - if you can read this, "
-                           "delivery works.")
+        ok = deliver("Sleeper lineup bot test",
+                     "Sleeper lineup bot test message - if you can read this, "
+                     "delivery works.")
         raise SystemExit(0 if ok else 1)
 
     subject, body = build_report(a.final, a.week, a.demo)
     print(subject)
     print(body)
     if not a.print_only and not a.demo:
-        if not send_whatsapp(body):
+        if not deliver(subject, body):
             # Fail the workflow so a silent non-delivery shows up as a red X
             # instead of a misleading green check.
             raise SystemExit(1)
