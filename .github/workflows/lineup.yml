@@ -2,6 +2,8 @@ name: Sleeper lineup to WhatsApp
 
 on:
   schedule:
+    # GitHub cron is UTC and ignores daylight saving, so both sets are listed.
+    # lineup.py --auto checks Eastern time and skips whichever does not apply.
     - cron: "0 13 * * 0"
     - cron: "45 15 * * 0"
     - cron: "0 14 * * 0"
@@ -24,6 +26,11 @@ jobs:
           LEAGUE_ID: "1394837725651177472"
           SLEEPER_USERNAME: "kingkonguhlig1"
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
           CALLMEBOT_PHONE: ${{ secrets.CALLMEBOT_PHONE }}
           CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
           WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
