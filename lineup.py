@@ -343,14 +343,24 @@ def send_email(subject: str, text: str) -> bool:
 
     host = os.getenv("SMTP_HOST") or "smtp.gmail.com"
     port = int(os.getenv("SMTP_PORT") or "587")
-    user = os.getenv("SMTP_USER")
-    password = os.getenv("SMTP_PASS")
-    to_addr = os.getenv("EMAIL_TO") or user
-    from_addr = os.getenv("EMAIL_FROM") or user
+    user = (os.getenv("SMTP_USER") or "").strip()
+    # Google displays App Passwords as "abcd efgh ijkl mnop". Those spaces are
+    # display formatting only; SMTP AUTH rejects them. Strip all whitespace.
+    password = "".join((os.getenv("SMTP_PASS") or "").split())
+    to_addr = (os.getenv("EMAIL_TO") or "").strip() or user
+    from_addr = (os.getenv("EMAIL_FROM") or "").strip() or user
 
     if not (user and password and to_addr):
         print("Email: not configured, skipping.")
         return False
+
+    raw_len = len(os.getenv("SMTP_PASS") or "")
+    if raw_len != len(password):
+        print(f"  (stripped whitespace from SMTP_PASS: {raw_len} -> {len(password)} chars)")
+    if "gmail" in host and len(password) != 16:
+        print(f"  WARNING: Gmail App Passwords are exactly 16 characters; after "
+              f"stripping, yours is {len(password)}. Regenerate at "
+              f"https://myaccount.google.com/apppasswords", file=sys.stderr)
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -410,7 +420,6 @@ def report_config() -> None:
 
 def send_whatsapp(text: str) -> bool:
     """Tries Twilio -> Meta Cloud API -> CallMeBot. Loud about what it did."""
-    report_config()
     sent = False
     attempted = False
 
@@ -483,17 +492,16 @@ def send_whatsapp(text: str) -> bool:
         print("CallMeBot: not configured, skipping.")
 
     if not attempted:
-        print("\nNO DELIVERY PROVIDER IS CONFIGURED.\n"
-              "Add repository secrets under Settings > Secrets and variables > Actions.\n"
-              "For CallMeBot you need CALLMEBOT_PHONE and CALLMEBOT_APIKEY.", file=sys.stderr)
+        print("No WhatsApp provider configured.")
     elif not sent:
-        print("\nA provider was configured but the send did not succeed - see above.",
+        print("\nA WhatsApp provider was configured but the send did not succeed.",
               file=sys.stderr)
     return sent
 
 
 def deliver(subject: str, text: str) -> bool:
     """Sends via every configured channel. True if at least one succeeded."""
+    report_config()
     ok_email = send_email(subject, text)
     ok_wa = send_whatsapp(text)
     if not (ok_email or ok_wa):
