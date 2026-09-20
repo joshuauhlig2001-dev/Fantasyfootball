@@ -397,13 +397,47 @@ def get_json_or_text(url: str) -> str:
         return r.read().decode(errors="ignore")[:300]
 
 
+def auto_decide() -> Tuple[bool, bool]:
+    """Returns (should_run, is_final_check) based on US Eastern time.
+
+    This lets the workflow carry duplicate winter/summer crons without ever
+    double-texting you, and keeps all date logic in Python instead of shell.
+    """
+    if os.getenv("GITHUB_EVENT_NAME", "") not in ("schedule", ""):
+        return True, False  # manual run: always send
+    try:
+        import datetime
+        import zoneinfo
+        now = datetime.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+    except Exception:  # noqa: BLE001
+        return True, False
+    if now.weekday() != 6:  # not Sunday
+        return False, False
+    if now.hour == 9 and now.minute < 40:
+        return True, False
+    if now.hour == 11 and now.minute >= 30:
+        return True, True
+    if now.hour == 12 and now.minute < 15:
+        return True, True
+    return False, False
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--week", type=int)
     ap.add_argument("--final", action="store_true")
     ap.add_argument("--print-only", action="store_true")
     ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--auto", action="store_true",
+                    help="decide run/skip and plan-vs-final from Eastern time")
     a = ap.parse_args()
+
+    if a.auto:
+        should_run, is_final = auto_decide()
+        if not should_run:
+            print("Outside the Sunday send window (ET) - skipping, no message sent.")
+            return
+        a.final = a.final or is_final
 
     subject, body = build_report(a.final, a.week, a.demo)
     print(subject)
